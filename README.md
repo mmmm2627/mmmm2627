@@ -27,7 +27,7 @@ I am a Biostatistics Master's student at UCLA with expertise in statistical mode
 ### 📊 Project 2: Advertising Campaign Data Analysis
 - Summary: Analyzed advertising campaign data to optimize efficiency and streamline data processing, identifying opportunities to improve performance by 15%. Automated data entry processes to reduce manual effort and enhanced workflow efficiency.
 - Tech Stack: Python (Pandas, PyMySQL), SQL
-- Repo: [Project 2 Advertising Campaign Data Analysis](https://github.com/mmmm2627/fangningluo-portfolio/tree/main/Proj2%20Advertising%20Campaign%20Data%20Analysis)
+- Repo: [Project 2 Advertising Campaign Data Analysis](https://github.com/mmmm2627/mmmm2627/tree/main/Proj2%20Advertising%20Campaign%20Data%20Analysis)
 
 ### 🧠 Project 3: Predicting Surface Protein Levels from Gene Expression
 - Summary: Developed a neural network model to predict surface protein levels from gene expression data, leveraging MLP and CNN architectures. Achieved a high accuracy score of 0.936, optimizing model performance with early stopping, learning rate scheduling, and cross-validation.
