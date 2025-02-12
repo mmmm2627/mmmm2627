@@ -1,0 +1,2182 @@
+---
+title: "DE_NCU_v2"
+author: "Sophia Luo"
+date: "2024-02-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Packages and Data
+
+```{r load_packages}
+library(edgeR)
+library("RColorBrewer")
+library("gplots")         #format output plots
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(openxlsx)             #write output excel files
+library(readxl)
+library(ggfortify)
+library(tibble)
+```
+
+```{r input_files}
+##Global Variables 
+counts_H_Dele_data <- read.delim("dele_head_counts.txt", row.names = 1)
+counts_W_Dele_data <- read.delim("dele_wing_counts.txt", row.names = 1)
+
+counts_H_Dgun_data <- read.delim("dgun_head_counts.txt", row.names = 1)
+counts_W_Dgun_data <- read.delim("dgun_wing_counts.txt", row.names = 1)
+```
+
+```{r}
+write.xlsx(counts_H_Dele_data, "./counts_H_Dele_data.xlsx", row.names = TRUE)
+write.xlsx(counts_H_Dgun_data, "./counts_H_Dgun_data.xlsx", rowNames = TRUE)
+```
+
+# Discard Outlier Libraries
+```{r}
+# Dele Head Discard List:
+# Dele_M_0_H_1
+# Dele_F_0_H_1
+# Dele_F_5_H_3
+# Dele_M_5_H_2
+discard_list <- c("Dele_M_0_H_1", "Dele_F_0_H_1", "Dele_F_5_H_3", "Dele_M_5_H_2")
+counts_H_Dele_data <- counts_H_Dele_data[, !(colnames(counts_H_Dele_data) %in% discard_list)]
+```
+
+```{r}
+# Dgun Head Discard List:
+# Dgun_M_0_H_2
+# Dgun_F_0_H_5
+# Dgun_F_5_H_5
+# Dgun_M_5_H_3
+discard_list <- c("Dgun_M_0_H_2", "Dgun_F_0_H_5", "Dgun_F_5_H_5", "Dgun_M_5_H_3")
+counts_H_Dgun_data <- counts_H_Dgun_data[, !(colnames(counts_H_Dgun_data) %in% discard_list)]
+```
+
+# Extract Raw gene name
+```{r}
+deleH_raw <- as.data.frame(row.names(counts_H_Dele_data))
+deleH_raw$gene <- deleH_raw$`row.names(counts_H_Dele_data)`
+deleH_raw <- merge(deleH_raw, dele_flybase, by.x = "gene", by.y = "gene_id")
+deleH_raw <- deleH_raw[, c("gene", "fb_gene_id", "symbol")]
+deleH_raw <- deleH_raw %>% filter(fb_gene_id != "NA")
+
+write.xlsx(deleH_raw, "./deleH_raw.xlsx")
+```
+
+```{r}
+dgunH_raw <- as.data.frame(row.names(counts_H_Dgun_data))
+dgunH_raw$gene <- dgunH_raw$`row.names(counts_H_Dgun_data)`
+
+dgunH_raw <- merge(dgunH_raw, dgun_flybase, by.x = "gene", by.y = "gene_id")
+dgunH_raw <- dgunH_raw[, c("gene", "fb_gene_id", "symbol")]
+dgunH_raw <- dgunH_raw %>% filter(fb_gene_id != "NA")
+
+write.xlsx(dgunH_raw, "./dgunH_raw.xlsx")
+```
+
+
+# import annotation info
+```{r}
+#Read in the counts data and annotation information
+gtf <- rtracklayer::import("dgun.gtf")
+anno_data <- as.data.frame(gtf)
+
+anno_dgun <- anno_data[anno_data$type == "gene",]
+
+
+gtf <- rtracklayer::import("dele.gtf")
+anno_data <- as.data.frame(gtf)
+
+anno_dele <- anno_data[anno_data$type == "gene",]
+```
+
+# Preprocessing and Normalization Factors
+
+```{r}
+# Dele head
+sample_names <- colnames(counts_H_Dele_data)
+metadata_delehead <- as.data.frame(strsplit2(sample_names, c("_")), 
+                          row.names = sample_names)
+colnames(metadata_delehead) <- c("species", "sex", "stage", "tissue", "replicate")
+
+# # Dele wing
+# sample_names <- colnames(counts_W_Dele_data)
+# metadata_delewing <- as.data.frame(strsplit2(sample_names, c("_")), 
+#                           row.names = sample_names)
+# colnames(metadata_delewing) <- c("species", "sex", "stage", "tissue", "replicate")
+
+# Dgun head
+sample_names <- colnames(counts_H_Dgun_data)
+metadata_dgunhead <- as.data.frame(strsplit2(sample_names, c("_")), 
+                          row.names = sample_names)
+colnames(metadata_dgunhead) <- c("species", "sex", "stage", "tissue", "replicate")
+
+# # Dgun wing
+# sample_names <- colnames(counts_W_Dgun_data)
+# metadata_dgunwing <- as.data.frame(strsplit2(sample_names, c("_")), 
+#                           row.names = sample_names)
+# colnames(metadata_dgunwing) <- c("species", "sex", "stage", "tissue", "replicate")
+```
+
+```{r set_model}
+#Create a new variable group that combines sex with stage
+#dele head
+group <- interaction(metadata_delehead$sex, metadata_delehead$stage)
+metadata_delehead$group <- interaction(metadata_delehead$species, 
+                                       metadata_delehead$sex,
+                                       metadata_delehead$tissue,
+                                       metadata_delehead$stage)
+d0_deleH <- DGEList(counts_H_Dele_data, group=group)
+
+# #dele wing
+# group <- interaction(metadata_delewing$sex, metadata_delewing$stage)
+# metadata_delewing$group <- interaction(metadata_delewing$species, 
+#                                        metadata_delewing$sex,
+#                                        metadata_delewing$tissue,
+#                                        metadata_delewing$stage)
+# # mm <- model.matrix(~0 + group)
+# d0_deleW <- DGEList(counts_W_Dele_data, group=group)
+
+#dgun head
+group <- interaction(metadata_dgunhead$sex, metadata_dgunhead$stage)
+metadata_dgunhead$group <- interaction(metadata_dgunhead$species, 
+                                       metadata_dgunhead$sex,
+                                       metadata_dgunhead$tissue,
+                                       metadata_dgunhead$stage)
+d0_dgunH <- DGEList(counts_H_Dgun_data, group=group)
+
+# #dgun wing
+# group <- interaction(metadata_dgunwing$sex, metadata_dgunwing$stage)
+# metadata_dgunwing$group <- interaction(metadata_dgunwing$species, 
+#                                        metadata_dgunwing$sex,
+#                                        metadata_dgunwing$tissue,
+#                                        metadata_dgunwing$stage)
+# # mm <- model.matrix(~0 + group)
+# d0_dgunW <- DGEList(counts_W_Dgun_data, group=group)
+
+```
+
+```{r normalization_factors}
+#Generate normalized expression values
+d0_deleH <- calcNormFactors(d0_deleH)
+# d0_deleW <- calcNormFactors(d0_deleW)
+
+d0_dgunH <- calcNormFactors(d0_dgunH)
+# d0_dgunW <- calcNormFactors(d0_dgunW)
+```
+
+# Extract CPM value
+```{r}
+deleH_cpm <- data.frame(cpm(d0_deleH))
+deleH_cpm <- rownames_to_column(deleH_cpm, var = "gene")
+
+# create data frame containing candidate gene_id and their symbols
+# last four are yellow genes
+gene <- c("LOC108137111", "LOC108136748", "LOC108140559", 
+            "LOC108136586", "LOC108135246", "LOC108147883",
+            "LOC108143431",
+            "LOC108146435", "LOC108134967", "LOC108150475")
+symbol <- c("bi", "fru", "pros", "iav", "CG43232", "CG43750", "yellow-d",
+              "yellow-g2", "yellow-f2", "yellow-b")
+dele_candidate <- data.frame(gene, symbol)
+
+deleH_cpm2 <- deleH_cpm %>%
+  filter(gene %in% dele_candidate$gene) %>%
+  merge(dele_candidate, by = "gene")
+
+write.xlsx(deleH_cpm2, file = "deleH_cpm.xlsx")
+```
+
+```{r}
+dgunH_cpm <- data.frame(cpm(d0_dgunH))
+dgunH_cpm <- rownames_to_column(dgunH_cpm, var = "gene")
+
+dgun_candidate <- data.frame(
+  # candidate dgun gene id and their symbols
+  # last four are yellow genes
+  # Note: CG43750 not present in raw count table, ignored here
+  gene = c("LOC128260643", "LOC128251814", "LOC128251826", 
+           "LOC128260864", "LOC128253360", "LOC128255119",
+           "LOC128259408", "LOC128262190", "LOC128263137"),
+  symbol = c("bi", "fru", "pros", "iav", "CG43232", "yellow-d",
+             "yellow-g2", "yellow-f2", "yellow-b")
+)
+
+dgunH_cpm2 <- dgunH_cpm %>%
+  filter(gene %in% dgun_candidate$gene) %>%
+  merge(dgun_candidate, by = "gene")
+
+write.xlsx(dgunH_cpm2, file = "dgunH_cpm.xlsx")
+```
+
+
+# CPM Filtering
+```{r}
+CPM_threshold <- 1
+# keep genes with a CPM value above the CPM threshold in at least 2 libraries
+# those two library must be in the same strain
+# filter out by CPM and recalculate library sizes afterwards
+```
+
+```{r}
+# DeleHead
+CPM_table <- cpm(d0_deleH) > CPM_threshold # generate True/False table based on CPM threshold
+keep_table <- data.frame(scaffold = rep(0, nrow(CPM_table))) # table that combines each comb's keep/discard decision, the length is set to d0 row number
+
+for (metagroup in unique(metadata_delehead$group)) { # go through each group in metadata
+  groupsamples <- rownames(metadata_delehead)[which(metadata_delehead$group == metagroup)] # get list of subgroup sample names
+  group.subset <- CPM_table[, groupsamples] # subgroup raw count matrix
+  temp.keep <- rowSums(group.subset) >= 2 # use subgroup raw count matrix to make keep/discard decision and save decision in a list of logical data (true/false), only the genes with more than two replicates having CPM value > 1 are kept
+  keep_table <- cbind(keep_table, temp.keep) # combine decision to keep_table
+}
+
+keep_table[1] <- NULL # remove the first empty column generated at the beginning
+
+colnames(keep_table) <- c(unique(metadata_delehead$group)) # set keep_table column name to be group name
+keep <- rowSums(keep_table) >= 1 # final keep decision for each gene: keep the gene that is expressed in at least 2 libraries for each sex+stage combination
+d_deleH <- d0_deleH[keep, , keep.lib.sizes=FALSE]
+```
+
+```{r}
+# DeleWing
+# CPM_table <- cpm(d0_deleW) > CPM_threshold 
+# keep_table <- data.frame(scaffold = rep(0, nrow(CPM_table))) 
+# 
+# for (metagroup in unique(metadata_delewing$group)) { 
+#   groupsamples <- rownames(metadata_delewing)[which(metadata_delewing$group == metagroup)] 
+#   group.subset <- CPM_table[, groupsamples] 
+#   temp.keep <- rowSums(group.subset) >= 2 
+#   keep_table <- cbind(keep_table, temp.keep) 
+# }
+# 
+# keep_table[1] <- NULL 
+# 
+# colnames(keep_table) <- c(unique(metadata_delewing$group)) 
+# keep <- rowSums(keep_table) >= 1 
+# d_deleW <- d0_deleW[keep, , keep.lib.sizes=FALSE]
+```
+
+```{r}
+# DgunHead
+CPM_table <- cpm(d0_dgunH) > CPM_threshold 
+keep_table <- data.frame(scaffold = rep(0, nrow(CPM_table))) 
+
+for (metagroup in unique(metadata_dgunhead$group)) { 
+  groupsamples <- rownames(metadata_dgunhead)[which(metadata_dgunhead$group == metagroup)] 
+  group.subset <- CPM_table[, groupsamples] 
+  temp.keep <- rowSums(group.subset) >= 2 
+  keep_table <- cbind(keep_table, temp.keep) 
+}
+
+keep_table[1] <- NULL 
+
+colnames(keep_table) <- c(unique(metadata_dgunhead$group)) 
+keep <- rowSums(keep_table) >= 1 
+d_dgunH <- d0_dgunH[keep, , keep.lib.sizes=FALSE]
+```
+
+```{r}
+# DgunWing
+# CPM_table <- cpm(d0_dgunW) > CPM_threshold 
+# keep_table <- data.frame(scaffold = rep(0, nrow(CPM_table))) 
+# 
+# for (metagroup in unique(metadata_dgunwing$group)) { 
+#   groupsamples <- rownames(metadata_dgunwing)[which(metadata_dgunwing$group == metagroup)] 
+#   group.subset <- CPM_table[, groupsamples] 
+#   temp.keep <- rowSums(group.subset) >= 2 
+#   keep_table <- cbind(keep_table, temp.keep) 
+# }
+# 
+# keep_table[1] <- NULL 
+# 
+# colnames(keep_table) <- c(unique(metadata_dgunwing$group)) 
+# keep <- rowSums(keep_table) >= 1 
+# d_dgunW <- d0_dgunW[keep, , keep.lib.sizes=FALSE]
+```
+
+```{r graph_boxplot_CPM}
+#Generate graphs for pre and post CPM filtering 
+lcpm_pre <- cpm(d0_deleH, log=TRUE)
+boxplot(lcpm_pre, las=2)
+title(main="A. Pre-CPM Filtering Dele Head", ylab="Log-cpm")
+
+lcpm_post <- cpm(d_deleH, log=TRUE)
+boxplot(lcpm_post, las=2)
+title(main="B. Post-CPM Filtering Dele Head", ylab="Log-cpm")
+
+lcpm_pre <- cpm(d0_deleW, log=TRUE)
+boxplot(lcpm_pre, las=2)
+title(main="A. Pre-CPM Filtering Dele Wing", ylab="Log-cpm")
+
+lcpm_post <- cpm(d_deleW, log=TRUE)
+boxplot(lcpm_post, las=2)
+title(main="B. Post-CPM Filtering Dele Wing", ylab="Log-cpm")
+
+
+lcpm_pre <- cpm(d0_dgunH, log=TRUE)
+boxplot(lcpm_pre, las=2)
+title(main="A. Pre-CPM Filtering Dgun Head", ylab="Log-cpm")
+
+lcpm_post <- cpm(d_dgunH, log=TRUE)
+boxplot(lcpm_post, las=2)
+title(main="B. Post-CPM Filtering Dgun Head", ylab="Log-cpm")
+
+lcpm_pre <- cpm(d0_dgunW, log=TRUE)
+boxplot(lcpm_pre, las=2)
+title(main="A. Pre-CPM Filtering Dgun Wing", ylab="Log-cpm")
+
+lcpm_post <- cpm(d_dgunW, log=TRUE)
+boxplot(lcpm_post, las=2)
+title(main="B. Post-CPM Filtering Dgun Wing", ylab="Log-cpm")
+```
+
+# Extract expression gene list
+```{r}
+deleH_exp <- as.data.frame(rownames(d_deleH$counts))
+deleH_exp$gene_id <- deleH_exp$`rownames(d_deleH$counts)`
+deleH_exp <- merge(deleH_exp, dele_dgun_unique, by.x = "gene_id", by.y = "dele_gene_id")
+deleH_exp <- deleH_exp[, c(1, 3, 4, 5)]
+
+dgunH_expressed <- as.data.frame(rownames(d_dgunH$counts))
+dgunH_expressed$gene_id <- dgunH_expressed$`rownames(d_dgunH$counts)`
+dgunH_expressed <- merge(dgunH_expressed, dele_dgun_unique, by.x = "gene_id", by.y = "dgun_gene_id")
+dgunH_expressed <- dgunH_expressed[, c(1, 3, 4, 5)]
+
+write.xlsx(deleH_expressed, "deleH_expressed.xlsx")
+write.xlsx(dgunH_expressed, "dgunH_expressed.xlsx")
+```
+
+# Plot PCA & Pearson Correlation plot with log2 CPM value
+```{r log 2 CPM value transformation}
+log2d_deleH <- log2(cpm(d_deleH)+1)
+# log2d_deleW <- log2(cpm(d_deleW)+1)
+
+log2d_dgunH <- log2(cpm(d_dgunH)+1)
+# log2d_dgunW <- log2(cpm(d_dgunW)+1)
+```
+
+```{r}
+library(ggrepel)
+```
+
+# PCA
+```{r PCA with log2 CPM value Dele}
+# Dele Head
+CPMforPCA_DeleH <- t(log2d_deleH)
+CPMforPCA_DeleH_save <- as.data.frame(CPMforPCA_DeleH)
+CPMforPCA_DeleH_save$Sex <- metadata_delehead$sex
+CPMforPCA_DeleH_save$Stage <- metadata_delehead$stage
+pc <- prcomp(CPMforPCA_DeleH)
+
+options(ggrepel.max.overlaps = Inf)
+
+autoplot(pc, data = CPMforPCA_DeleH_save, colour = 'Sex', shape = "Stage", x = 1, y = 2) +
+  # ggplot2::ggtitle("Scatter plot for Dele Head") + 
+  geom_text_repel(aes(label =rownames(CPMforPCA_DeleH_save), color = Sex), size = 3) +
+  ggplot2::theme(panel.background = element_rect(fill="#FFFFFF"),
+                      panel.grid.major = element_line(color="#d3d3d3"),
+                      axis.line.x = element_line(color = "#000000"),
+                      axis.line.y = element_line(color = "#000000")
+)
+
+# Dele Wing
+# CPMforPCA_DeleW <- t(log2d_deleW)
+# CPMforPCA_DeleW_save <- as.data.frame(CPMforPCA_DeleW)
+# CPMforPCA_DeleW_save$Sex <- metadata_delewing$sex
+# CPMforPCA_DeleW_save$Stage <- metadata_delewing$stage
+# pc <- prcomp(CPMforPCA_DeleW[,1:ncol(CPMforPCA_DeleW)])
+# 
+# autoplot(pc, data = CPMforPCA_DeleW_save, colour = 'Sex', shape = "Stage", x = 1, y = 2) +
+#   ggplot2::ggtitle("Scatter plot for Dele Wing")+geom_text_repel(aes(label =rownames(CPMforPCA_DeleW_save), color = Sex), size = 2) +
+#   ggplot2::theme(panel.background = element_rect(fill="#FFFFFF"),
+#                  panel.grid.major = element_line(color="#d3d3d3"),
+#                  axis.line.x = element_line(color = "#000000"),
+#                  axis.line.y = element_line(color = "#000000")
+# )
+```
+
+```{r PCA with log2 CPM value Dgun}
+# Dgun Head
+options(ggrepel.max.overlaps = Inf)
+
+CPMforPCA_DgunH <- t(log2d_dgunH)
+CPMforPCA_DgunH_save <- as.data.frame(CPMforPCA_DgunH)
+CPMforPCA_DgunH_save$Sex <- metadata_dgunhead$sex
+CPMforPCA_DgunH_save$Stage <- metadata_dgunhead$stage
+pc <- prcomp(CPMforPCA_DgunH[,1:ncol(CPMforPCA_DgunH)])
+
+autoplot(pc, data = CPMforPCA_DgunH_save, colour = 'Sex', shape = "Stage", x = 1, y = 2) +
+  # ggplot2::ggtitle("Scatter plot for Dgun Head") + 
+  geom_text_repel(aes(label =rownames(CPMforPCA_DgunH_save), color = Sex), size = 3) +
+  ggplot2::theme(panel.background = element_rect(fill="#FFFFFF"),
+                 panel.grid.major = element_line(color="#d3d3d3"),
+                 axis.line.x = element_line(color = "#000000"),
+                 axis.line.y = element_line(color = "#000000")
+)
+```
+
+```{r MDS of logCPM value Dele}
+# Dele head
+opar <- par(no.readonly = TRUE)
+par(xpd = TRUE, mar = par()$mar + c(0, 0, 0, 5))
+mds_result <- plotMDS(log2d_deleH, col = c(rep("red", 10), rep("blue", 10)), cex = 1, dim.plot = c(1, 2), pch = c(rep(16, 4), rep(17, 4), rep(16, 4), rep(17, 4)))
+text(x = mds_result$x, y = mds_result$y, labels = rownames(d_deleH$samples), pos = 3, cex = 0.8, col = "darkgray")
+legend(par("usr")[2], par("usr")[4], c("male","female", "day 0", "day 5"), pch = c(16, 16, 16, 17), col = c("blue","red", "black", "black"), bty = "n")
+par(opar)
+```
+
+```{r MDS of logCPM value Dgun}
+# Dgun head
+opar <- par(no.readonly = TRUE)
+par(xpd = TRUE, mar = par()$mar + c(0, 0, 0, 5))
+mds_result <- plotMDS(log2d_dgunH, col = c(rep("red", 10), rep("blue", 10)), cex = 1, dim.plot = c(1, 2), pch = c(rep(16, 4), rep(17, 4), rep(16, 4), rep(17, 4)))
+text(x = mds_result$x, y = mds_result$y, labels = rownames(d_dgunH$samples), pos = 3, cex = 0.8, col = "darkgray")
+legend(par("usr")[2], par("usr")[4], c("male","female", "day 0", "day 5"), pch = c(16, 16, 16, 17), col = c("blue","red", "black", "black"), bty = "n")
+par(opar)
+```
+
+# Pearson correlation heatmap
+
+```{r}
+library(NMF)
+library(pheatmap)
+```
+
+```{r Heatmap with log2 CPM value}
+# Correlation for Dele Head
+corr_deleH <- cor(log2d_deleH)
+# pheatmap(corr_deleH,main = "Correlation beween Dele head samples",labCol=metadata_delehead$group,labRow=metadata_delehead$group, cellwidth = 10, cellheight = 10)
+heatmap <- pheatmap(corr_deleH,labCol=metadata_delehead$group,labRow=metadata_delehead$group, cellwidth = 12, cellheight = 12)
+png("./GO_analysis/dele_pearson.png", res = 250, width = 1500, height = 1500)
+print(heatmap)
+dev.off()
+
+# Correlation for Dele Wing
+# corr_deleW <- cor(log2d_deleW)
+# pheatmap(corr_deleW,main = "Correlation beween Dele wing samples",labCol=metadata_delewing$group,labRow=metadata_delewing$group, cellwidth = 8, cellheight = 8)
+
+# Correlation for Dgun head
+corr_dgunH <- cor(log2d_dgunH)
+# pheatmap(corr_dgunH, main = "Correlation between Dgun head samples", labCol = metadata_dgunhead$group, labRow = metadata_dgunhead$group, cellwidth = 10, cellheight = 10)
+heatmap <- pheatmap(corr_dgunH, labCol = metadata_dgunhead$group, labRow = metadata_dgunhead$group, cellwidth = 12, cellheight = 12)
+png("./GO_analysis/dgun_pearson.png", res = 250, width = 1500, height = 1500)
+print(heatmap)
+dev.off()
+# Correlation for Dgun wing
+# corr_dgunW <- cor(log2d_dgunW)
+# pheatmap(corr_dgunW, main = "Correlation between Dgun wing samples", labCol = metadata_dgunwing$group, labRow = metadata_dgunwing$group, cellwidth = 8, cellheight = 8)
+
+```
+
+## Voom transformation
+
+```{r}
+#What is voom doing?
+#1. Counts are transformed to log2 counts per million reads (CPM), where 
+#   "per million reads" is defined based on the normalization factors we 
+#   calculated earlier.
+#2. A linear model is fitted to the log2 CPM for each gene, and the residuals 
+#   are calculated.
+#3. A smoothed curve is fitted to the sqrt(residual standard deviation) by 
+#   average expression.
+#(see red line in plot above)
+#4. The smoothed curve is used to obtain weights for each gene and sample 
+#   that are passed into limma along with the log2 CPMs.
+y_deleH <- voom(d_deleH, mm_deleH, plot = T)
+
+y_dgunH <- voom(d_dgunH, mm_dgunH, plot = T)
+```
+# Fitting a linear model and comaring using 2 Way ANOVA
+
+```{r model_design}
+# Dele Head
+sex <- factor(metadata_delehead$sex)
+sex <- relevel(sex, ref="F")
+stage <- factor(metadata_delehead$stage)
+stage <- relevel(stage, ref = "0")
+mm_deleH = model.matrix(~sex*stage)
+rownames(mm_deleH) <- rownames(d_deleH$samples)
+# Interpretation (9.5.4 Classic Interaction Models): https://bioconductor.org/packages/release/bioc/vignettes/limma/inst/doc/usersguide.pdf
+# https://support.bioconductor.org/p/102964/
+# Coefficient   Comparison      Interpretation
+# Intercept     F.0             Baseline level of female day 0
+# Male          M.0 - F.0       Difference between sexes in day 0
+# Day 5         F.5 - F.0       Difference between stages in female
+# sexM:stage5 (M.5-M.0)-(F.5-F.0) Interaction
+
+# Note: M.5 - M.0 and M.5 - F.5 are not included, needs another model
+sex <- relevel(sex, ref="M")
+stage <- relevel(stage, ref = "5")
+mm2_deleH = model.matrix(~sex*stage)
+rownames(mm2_deleH) <- rownames(d_deleH$targets)
+# Coefficient   Comparison      Interpretation
+# Intercept     M.5             Baseline level of male day 5
+# Female        F.5 - M.5       Difference between sexes in day 5
+# Day 0         M.0 - M.5       Difference between stages in male
+# sexM:stage5 (F.0-F.5)-(M.0-M.5) Interaction
+
+# After negation of Female and Day 0 columns, mm2:
+# Coefficient   Comparison      Interpretation
+# Intercept     M.5             Baseline level of male day 5
+# Female        M.5 - F.5       Difference between sexes in day 5
+# Day 0         M.5 - M.0       Difference between stages in male
+# sexM:stage5 (F.0-F.5)-(M.0-M.5) Interaction
+```
+
+```{r}
+# Dgun Head
+sex <- factor(metadata_dgunhead$sex)
+sex <- relevel(sex, ref="F")
+stage <- factor(metadata_dgunhead$stage)
+stage <- relevel(stage, ref = "0")
+mm_dgunH = model.matrix(~sex*stage)
+rownames(mm_dgunH) <- rownames(d_dgunH$samples)
+
+sex <- relevel(sex, ref="M")
+stage <- relevel(stage, ref = "5")
+mm2_dgunH = model.matrix(~sex*stage)
+rownames(mm2_dgunH) <- rownames(d_dgunH$samples)
+```
+
+```{r model_fitting}
+# Dele head model fitting
+fit <- lmFit(y_deleH, mm_deleH)
+fit_deleH <- eBayes(fit)
+
+fit <- lmFit(y_deleH, mm2_deleH)
+fit2_deleH <- eBayes(fit)
+```
+
+```{r}
+# Dgun head model fitting
+fit <- lmFit(y_dgunH, mm_dgunH)
+fit_dgunH <- eBayes(fit)
+
+fit <- lmFit(y_dgunH, mm2_dgunH)
+fit2_dgunH <- eBayes(fit)
+```
+
+# Isolate each contrast and generate top table for each
+
+```{r differential gene expression}
+# https://ucdavis-bioinformatics-training.github.io/2018-June-RNA-Seq-Workshop/thursday/DE.html
+# DeleH M.0 - F.0
+tmp <- contrasts.fit(fit_deleH, coef = 2)
+tmp <- eBayes(tmp)
+top.table_deleHM0F0 <- topTable(tmp, sort.by = "none", n = Inf)
+
+# DeleH F.5 - F.0
+tmp <- contrasts.fit(fit_deleH, coef = 3)
+tmp <- eBayes(tmp)
+top.table_deleHF5F0 <- topTable(tmp, sort.by = "none", n = Inf)
+
+# DeleH M.5 - F.5
+tmp <- contrasts.fit(fit2_deleH, coef = 2)
+tmp <- eBayes(tmp)
+top.table_deleHM5F5 <- topTable(tmp, sort.by = "none", n = Inf)
+top.table_deleHM5F5[, 1] <- -top.table_deleHM5F5[, 1]
+
+# DeleH M.5 - M.0
+tmp <- contrasts.fit(fit2_deleH, coef = 3)
+tmp <- eBayes(tmp)
+top.table_deleHM5M0 <- topTable(tmp, sort.by = "none", n = Inf)
+top.table_deleHM5M0[, 1] <- -top.table_deleHM5M0[, 1]
+
+# DeleH interaction (M.5-M.0)-(F.5-F.0) Male difference is greater than female difference
+tmp <- contrasts.fit(fit_deleH, coef = 4)
+tmp <- eBayes(tmp)
+top.table_deleHInteraction <- topTable(tmp, sort.by = "none", n = Inf)
+```
+
+```{r}
+# DgunH M.0 - F.0
+tmp <- contrasts.fit(fit_dgunH, coef = 2)
+tmp <- eBayes(tmp)
+top.table_dgunHM0F0 <- topTable(tmp, sort.by = "none", n = Inf)
+
+# DgunH F.5 - F.0
+tmp <- contrasts.fit(fit_dgunH, coef = 3)
+tmp <- eBayes(tmp)
+top.table_dgunHF5F0 <- topTable(tmp, sort.by = "none", n = Inf)
+
+# DgunH M.5 - F.5
+tmp <- contrasts.fit(fit2_dgunH, coef = 2)
+tmp <- eBayes(tmp)
+top.table_dgunHM5F5 <- topTable(tmp, sort.by = "none", n = Inf)
+top.table_dgunHM5F5[, 1] <- -top.table_dgunHM5F5[, 1]
+
+# DgunH M.5 - M.0
+tmp <- contrasts.fit(fit2_dgunH, coef = 3)
+tmp <- eBayes(tmp)
+top.table_dgunHM5M0 <- topTable(tmp, sort.by = "none", n = Inf)
+top.table_dgunHM5M0[, 1] <- -top.table_dgunHM5M0[, 1]
+
+# DgunH interaction (M.5-M.0)-(F.5-F.0) Male difference is greater than female difference
+tmp <- contrasts.fit(fit_dgunH, coef = 4)
+tmp <- eBayes(tmp)
+top.table_dgunHInteraction <- topTable(tmp, sort.by = "none", n = Inf)
+```
+
+# Extract logFC & adjust.p value
+```{r}
+# Dele candidate genes
+top.table_deleHM5M0 %>%
+  filter(Gene %in% dele_candidate$gene) %>%
+  select(logFC, adj.P.Val, Gene) %>%
+  arrange(factor(Gene, levels = dele_candidate$gene))
+
+top.table_deleHF5F0 %>%
+  filter(Gene %in% dele_candidate$gene) %>%
+  select(logFC, adj.P.Val, Gene) %>%
+  arrange(factor(Gene, levels = dele_candidate$gene))
+
+top.table_dgunHM5M0 %>%
+  filter(Gene %in% dgun_candidate$gene) %>%
+  select(logFC, adj.P.Val, Gene) %>%
+  arrange(factor(Gene, levels = dgun_candidate$gene))
+
+top.table_dgunHF5F0 %>%
+  filter(Gene %in% dgun_candidate$gene) %>%
+  select(logFC, adj.P.Val, Gene) %>%
+  arrange(factor(Gene, levels = dgun_candidate$gene))
+```
+
+# Filter by multiple test correction
+
+```{r multiple_test_correction}
+# Filter by adjusted P.value < 0.01
+# merge with annotation
+# merge with log CPM
+fdr <- 0.01
+
+# Dele head
+top.table_deleHM0F0$Gene <- rownames(top.table_deleHM0F0)
+fdr_deleHM0F0 <- top.table_deleHM0F0[which(top.table_deleHM0F0$adj.P.Val < fdr),]
+
+top.table_deleHM5F5$Gene <- rownames(top.table_deleHM5F5)
+fdr_deleHM5F5 <- top.table_deleHM5F5[which(top.table_deleHM5F5$adj.P.Val < fdr),]
+
+top.table_deleHF5F0$Gene <- rownames(top.table_deleHF5F0)
+fdr_deleHF5F0 <- top.table_deleHF5F0[which(top.table_deleHF5F0$adj.P.Val < fdr),]
+
+top.table_deleHM5M0$Gene <- rownames(top.table_deleHM5M0)
+fdr_deleHM5M0 <- top.table_deleHM5M0[which(top.table_deleHM5M0$adj.P.Val < fdr),]
+
+top.table_deleHInteraction$Gene <- rownames(top.table_deleHInteraction)
+fdr_deleHInteraction <- top.table_deleHInteraction[which(top.table_deleHInteraction$adj.P.Val < fdr),]
+```
+
+```{r}
+# Dgun head
+top.table_dgunHM0F0$Gene <- rownames(top.table_dgunHM0F0)
+fdr_dgunHM0F0 <- top.table_dgunHM0F0[which(top.table_dgunHM0F0$adj.P.Val < fdr),]
+
+top.table_dgunHM5F5$Gene <- rownames(top.table_dgunHM5F5)
+fdr_dgunHM5F5 <- top.table_dgunHM5F5[which(top.table_dgunHM5F5$adj.P.Val < fdr),]
+
+top.table_dgunHF5F0$Gene <- rownames(top.table_dgunHF5F0)
+fdr_dgunHF5F0 <- top.table_dgunHF5F0[which(top.table_dgunHF5F0$adj.P.Val < fdr),]
+
+top.table_dgunHM5M0$Gene <- rownames(top.table_dgunHM5M0)
+fdr_dgunHM5M0 <- top.table_dgunHM5M0[which(top.table_dgunHM5M0$adj.P.Val < fdr),]
+
+top.table_dgunHInteraction$Gene <- rownames(top.table_dgunHInteraction)
+fdr_dgunHInteraction <- top.table_dgunHInteraction[which(top.table_dgunHInteraction$adj.P.Val < fdr),]
+```
+
+# Filtering by logFC
+
+```{r logFC filtering function}
+logFCfilter <- function(inputtop.table) {
+  tempcomp <- inputtop.table$logFC < -0.5 | inputtop.table$logFC > 0.5
+  output_df <- inputtop.table[tempcomp,, drop = FALSE]
+  return(output_df)
+}
+```
+
+```{r}
+# Dele head
+logFC_deleHM0F0 <- logFCfilter(fdr_deleHM0F0)
+logFC_deleHF5F0 <- logFCfilter(fdr_deleHF5F0)
+logFC_deleHM5F5 <- logFCfilter(fdr_deleHM5F5)
+logFC_deleHM5M0 <- logFCfilter(fdr_deleHM5M0)
+logFC_deleHInteraction <- logFCfilter(fdr_deleHInteraction)
+
+nrow(logFC_deleHM0F0[logFC_deleHM0F0$logFC > 0.5,])
+nrow(logFC_deleHF5F0[logFC_deleHF5F0$logFC > 0.5,])
+nrow(logFC_deleHM5F5[logFC_deleHM5F5$logFC > 0.5,])
+nrow(logFC_deleHM5M0[logFC_deleHM5M0$logFC > 0.5,])
+nrow(logFC_deleHInteraction[logFC_deleHInteraction$logFC > 0.5,])
+
+nrow(logFC_deleHM0F0[logFC_deleHM0F0$logFC < -0.5,])
+nrow(logFC_deleHF5F0[logFC_deleHF5F0$logFC < -0.5,])
+nrow(logFC_deleHM5F5[logFC_deleHM5F5$logFC < -0.5,])
+nrow(logFC_deleHM5M0[logFC_deleHM5M0$logFC < -0.5,])
+nrow(logFC_deleHInteraction[logFC_deleHInteraction$logFC < -0.5,])
+```
+```{r}
+# Dgun head
+logFC_dgunHM0F0 <- logFCfilter(fdr_dgunHM0F0)
+logFC_dgunHF5F0 <- logFCfilter(fdr_dgunHF5F0)
+logFC_dgunHM5F5 <- logFCfilter(fdr_dgunHM5F5)
+logFC_dgunHM5M0 <- logFCfilter(fdr_dgunHM5M0)
+logFC_dgunHInteraction <- logFCfilter(fdr_dgunHInteraction)
+
+nrow(logFC_dgunHM0F0[logFC_dgunHM0F0$logFC > 0.5,])
+nrow(logFC_dgunHF5F0[logFC_dgunHF5F0$logFC > 0.5,])
+nrow(logFC_dgunHM5F5[logFC_dgunHM5F5$logFC > 0.5,])
+nrow(logFC_dgunHM5M0[logFC_dgunHM5M0$logFC > 0.5,])
+nrow(logFC_dgunHInteraction[logFC_dgunHInteraction$logFC > 0.5,])
+
+nrow(logFC_dgunHM0F0[logFC_dgunHM0F0$logFC < -0.5,])
+nrow(logFC_dgunHF5F0[logFC_dgunHF5F0$logFC < -0.5,])
+nrow(logFC_dgunHM5F5[logFC_dgunHM5F5$logFC < -0.5,])
+nrow(logFC_dgunHM5M0[logFC_dgunHM5M0$logFC < -0.5,])
+nrow(logFC_dgunHInteraction[logFC_dgunHInteraction$logFC < -0.5,])
+```
+
+# Compare Stage DE gene shared between sexes and unique to each sex
+```{r}
+# Dele head
+deleH_F <- logFC_deleHF5F0[, c("logFC", "Gene")]
+deleH_F$up_down_in5 <- ifelse(deleH_F$logFC > 0.5, "up", "down")
+
+deleH_M <- logFC_deleHM5M0[, c("logFC", "Gene")]
+deleH_M$up_down_in5 <- ifelse(deleH_M$logFC > 0.5, "up", "down")
+
+# overlap between two sexes
+length(intersect(deleH_F[deleH_F$up_down_in5 == "up",]$Gene, deleH_M[deleH_M$up_down_in5 == "up",]$Gene))
+length(intersect(deleH_F[deleH_F$up_down_in5 == "down",]$Gene, deleH_M[deleH_M$up_down_in5 == "down",]$Gene))
+# unique to each sex
+length(setdiff(deleH_F[deleH_F$up_down_in5 == "up",]$Gene, deleH_M[deleH_M$up_down_in5 == "up",]$Gene))
+length(setdiff(deleH_F[deleH_F$up_down_in5 == "down",]$Gene, deleH_M[deleH_M$up_down_in5 == "down",]$Gene))
+length(setdiff(deleH_M[deleH_M$up_down_in5 == "up",]$Gene, deleH_F[deleH_F$up_down_in5 == "up",]$Gene))
+length(setdiff(deleH_M[deleH_M$up_down_in5 == "down",]$Gene, deleH_F[deleH_F$up_down_in5 == "down",]$Gene))
+
+# Dgun head
+dgunH_F <- logFC_dgunHF5F0[, c("logFC", "Gene")]
+dgunH_F$up_down_in5 <- ifelse(dgunH_F$logFC > 0.5, "up", "down")
+
+dgunH_M <- logFC_dgunHM5M0[, c("logFC", "Gene")]
+dgunH_M$up_down_in5 <- ifelse(dgunH_M$logFC > 0.5, "up", "down")
+
+# overlap between two sexes
+length(intersect(dgunH_F[dgunH_F$up_down_in5 == "up",]$Gene, dgunH_M[dgunH_M$up_down_in5 == "up",]$Gene))
+length(intersect(dgunH_F[dgunH_F$up_down_in5 == "down",]$Gene, dgunH_M[dgunH_M$up_down_in5 == "down",]$Gene))
+# unique to each sex
+length(setdiff(dgunH_F[dgunH_F$up_down_in5 == "up",]$Gene, dgunH_M[dgunH_M$up_down_in5 == "up",]$Gene))
+length(setdiff(dgunH_F[dgunH_F$up_down_in5 == "down",]$Gene, dgunH_M[dgunH_M$up_down_in5 == "down",]$Gene))
+length(setdiff(dgunH_M[dgunH_M$up_down_in5 == "up",]$Gene, dgunH_F[dgunH_F$up_down_in5 == "up",]$Gene))
+length(setdiff(dgunH_M[dgunH_M$up_down_in5 == "down",]$Gene, dgunH_F[dgunH_F$up_down_in5 == "down",]$Gene))
+```
+
+# Compare Sex DE gene shared between stages and unique to each stage
+```{r}
+# Dele Head
+deleH_0 <- logFC_deleHM0F0[, c("logFC", "Gene")]
+deleH_0$M_F_biased <- ifelse(deleH_0$logFC > 0.5, "M", "F")
+
+deleH_5 <- logFC_deleHM5F5[, c("logFC", "Gene")]
+deleH_5$M_F_biased <- ifelse(deleH_5$logFC > 0.5, "M", "F")
+
+# overlap between two stages
+length(intersect(deleH_0[deleH_0$M_F_biased == "M",]$Gene, deleH_5[deleH_5$M_F_biased == "M",]$Gene))
+length(intersect(deleH_0[deleH_0$M_F_biased == "F",]$Gene, deleH_5[deleH_5$M_F_biased == "F",]$Gene))
+# unique to each stage
+length(setdiff(deleH_0[deleH_0$M_F_biased == "M",]$Gene, deleH_5[deleH_5$M_F_biased == "M",]$Gene))
+length(setdiff(deleH_0[deleH_0$M_F_biased == "F",]$Gene, deleH_5[deleH_5$M_F_biased == "F",]$Gene))
+length(setdiff(deleH_5[deleH_5$M_F_biased == "M",]$Gene, deleH_0[deleH_0$M_F_biased == "M",]$Gene))
+length(setdiff(deleH_5[deleH_5$M_F_biased == "F",]$Gene, deleH_0[deleH_0$M_F_biased == "F",]$Gene))
+
+# Dgun Head
+dgunH_0 <- logFC_dgunHM0F0[, c("logFC", "Gene")]
+dgunH_0$M_F_biased <- ifelse(dgunH_0$logFC > 0.5, "M", "F")
+
+dgunH_5 <- logFC_dgunHM5F5[, c("logFC", "Gene")]
+dgunH_5$M_F_biased <- ifelse(dgunH_5$logFC > 0.5, "M", "F")
+
+# overlap between two stages
+length(intersect(dgunH_0[dgunH_0$M_F_biased == "M",]$Gene, dgunH_5[dgunH_5$M_F_biased == "M",]$Gene))
+length(intersect(dgunH_0[dgunH_0$M_F_biased == "F",]$Gene, dgunH_5[dgunH_5$M_F_biased == "F",]$Gene))
+
+# unique to each stage
+length(setdiff(dgunH_0[dgunH_0$M_F_biased == "M",]$Gene, dgunH_5[dgunH_5$M_F_biased == "M",]$Gene))
+length(setdiff(dgunH_0[dgunH_0$M_F_biased == "F",]$Gene, dgunH_5[dgunH_5$M_F_biased == "F",]$Gene))
+length(setdiff(dgunH_5[dgunH_5$M_F_biased == "M",]$Gene, dgunH_0[dgunH_0$M_F_biased == "M",]$Gene))
+length(setdiff(dgunH_5[dgunH_5$M_F_biased == "F",]$Gene, dgunH_0[dgunH_0$M_F_biased == "F",]$Gene))
+```
+# Import BLASTp result
+
+```{r import_blasp_result}
+dele_dgun_unique <- read.csv("dgun_dele_dmel_unique.csv", header = TRUE)
+dele_dgun_dups <- read.csv("dgun_dele_dmel_dups.csv", header = TRUE)
+```
+
+```{r}
+dele_flybase <- read.csv("Dele_flybase_id.csv", header = TRUE)
+dgun_flybase <- read.csv("Dgun_flybase_id.csv", header = TRUE)
+```
+
+# Add Flybase ID to each gene based on 1-to-1 "dgun_dele_dmel_unique.csv"
+```{r}
+# Stage-pairwise
+# Dele Head
+deleH_F$match <- ifelse(deleH_F$Gene %in% dele_dgun_unique$dele_gene_id, "unique", NA)
+deleH_F <- merge(deleH_F, dele_dgun_unique, by.x = "Gene", by.y = "dele_gene_id", all.x = TRUE)
+rownames(deleH_F) <- deleH_F$Gene
+deleH_F <- deleH_F[, c("Gene", "up_down_in5", "match", "fb_gene_id", "fb_symbol")]
+
+deleH_M$match <- ifelse(deleH_M$Gene %in% dele_dgun_unique$dele_gene_id, "unique", NA)
+deleH_M <- merge(deleH_M, dele_dgun_unique, by.x = "Gene", by.y = "dele_gene_id", all.x = TRUE)
+rownames(deleH_M) <- deleH_M$Gene
+deleH_M <- deleH_M[, c("Gene", "up_down_in5", "match", "fb_gene_id", "fb_symbol")]
+
+# Dgun Head
+dgunH_F$match <- ifelse(dgunH_F$Gene %in% dele_dgun_unique$dgun_gene_id, "unique", NA)
+dgunH_F <- merge(dgunH_F, dele_dgun_unique, by.x = "Gene", by.y = "dgun_gene_id", all.x = TRUE)
+rownames(dgunH_F) <- dgunH_F$Gene
+dgunH_F <- dgunH_F[, c("Gene", "up_down_in5", "match", "fb_gene_id", "fb_symbol")]
+
+dgunH_M$match <- ifelse(dgunH_M$Gene %in% dele_dgun_unique$dgun_gene_id, "unique", NA)
+dgunH_M <- merge(dgunH_M, dele_dgun_unique, by.x = "Gene", by.y = "dgun_gene_id", all.x = TRUE)
+rownames(dgunH_M) <- dgunH_M$Gene
+dgunH_M <- dgunH_M[, c("Gene", "up_down_in5", "match", "fb_gene_id", "fb_symbol")]
+
+length(intersect(deleH_F[deleH_F$up_down_in5 == "up",]$fb_gene_id.x, dgunH_F[dgunH_F$up_down_in5 == "up",]$fb_gene_id.x))
+length(intersect(deleH_F[deleH_F$up_down_in5 == "down",]$fb_gene_id.x, dgunH_F[dgunH_F$up_down_in5 == "down",]$fb_gene_id.x))
+
+length(setdiff(deleH_F[deleH_F$up_down_in5 == "up",]$fb_gene_id.x, dgunH_F[dgunH_F$up_down_in5 == "up",]$fb_gene_id.x))
+length(setdiff(deleH_F[deleH_F$up_down_in5 == "down",]$fb_gene_id.x, dgunH_F[dgunH_F$up_down_in5 == "down",]$fb_gene_id.x))
+
+length(setdiff(dgunH_F[dgunH_F$up_down_in5 == "up",]$fb_gene_id.x, deleH_F[deleH_F$up_down_in5 == "up",]$fb_gene_id.x))
+length(setdiff(dgunH_F[dgunH_F$up_down_in5 == "down",]$fb_gene_id.x, deleH_F[deleH_F$up_down_in5 == "down",]$fb_gene_id.x))
+
+# Sex-pairwise
+# Dele Head
+deleH_0$match <- ifelse(deleH_0$Gene %in% dele_dgun_unique$dele_gene_id, "unique", NA)
+deleH_0 <- merge(deleH_0, dele_dgun_unique, by.x = "Gene", by.y = "dele_gene_id", all.x = TRUE)
+rownames(deleH_0) <- deleH_0$Gene
+deleH_0 <- deleH_0[, c("Gene", "M_F_biased", "match", "fb_gene_id", "fb_symbol")]
+
+deleH_5$match <- ifelse(deleH_5$Gene %in% dele_dgun_unique$dele_gene_id, "unique", NA)
+deleH_5 <- merge(deleH_5, dele_dgun_unique, by.x = "Gene", by.y = "dele_gene_id", all.x = TRUE)
+rownames(deleH_5) <- deleH_5$Gene
+deleH_5 <- deleH_5[, c("Gene", "M_F_biased", "match", "fb_gene_id", "fb_symbol")]
+
+# Dgun Head
+dgunH_0$match <- ifelse(dgunH_0$Gene %in% dele_dgun_unique$dgun_gene_id, "unique", NA)
+dgunH_0 <- merge(dgunH_0, dele_dgun_unique, by.x = "Gene", by.y = "dgun_gene_id", all.x = TRUE)
+rownames(dgunH_0) <- dgunH_0$Gene
+dgunH_0 <- dgunH_0[, c("Gene", "M_F_biased", "match", "fb_gene_id", "fb_symbol")]
+
+dgunH_5$match <- ifelse(dgunH_5$Gene %in% dele_dgun_unique$dgun_gene_id, "unique", NA)
+dgunH_5 <- merge(dgunH_5, dele_dgun_unique, by.x = "Gene", by.y = "dgun_gene_id", all.x = TRUE)
+rownames(dgunH_5) <- dgunH_5$Gene
+dgunH_5 <- dgunH_5[, c("Gene", "M_F_biased", "match", "fb_gene_id", "fb_symbol")]
+```
+
+# Add Flybase ID to each gene based on Dele_flybase_id.csv or Dgun_flybase_id.csv
+```{r}
+merge_species_fb_table <- function(data, ref){
+  # This function is used to merge DE gene summary table to either 
+  # "Dele_flybase_id.csv" or "Dgun_flybase_id.csv"
+  
+  # data: female, male, 0 day, 5 day DE gene summary table for both species and tissues
+  # ref: either "dele_flybase" or "dgun_flybase"
+  
+  if (!("has_fb_id" %in% colnames(data))){ # only perform the merging when it's not done before
+    data$has_fb_id <- ifelse(data$Gene %in% ref$gene_id, TRUE, FALSE)
+    data <- merge(data, ref, by.x = "Gene", by.y = "gene_id", all.x = TRUE)
+    data <- data[!(is.na(data$fb_gene_id.y)), ] # Remove genes without FB id recorded in reference table
+    rownames(data) <- data$Gene
+  }
+  return(data)
+}
+```
+
+```{r merge_species_fb_table}
+deleH_F <- merge_species_fb_table(deleH_F, dele_flybase)
+deleH_M <- merge_species_fb_table(deleH_M, dele_flybase)
+deleH_0 <- merge_species_fb_table(deleH_0, dele_flybase)
+deleH_5 <- merge_species_fb_table(deleH_5, dele_flybase)
+
+dgunH_F <- merge_species_fb_table(dgunH_F, dgun_flybase)
+dgunH_M <- merge_species_fb_table(dgunH_M, dgun_flybase)
+dgunH_0 <- merge_species_fb_table(dgunH_0, dgun_flybase)
+dgunH_5 <- merge_species_fb_table(dgunH_5, dgun_flybase)
+```
+
+
+```{r}
+mark_shared <- function(data1, data2, column, criteria, criteria2, scope){
+  # This function is used to mark if DE genes are overlapped or unique in either
+  # within-species or across-species comparison
+  
+  # data1: the first DE gene table
+  # data2: the second DE gene table
+  # column: either "up_down_in5" in stage-pairwise comparison DE gene or "M_F_biased" in sex-pairwise comparison
+  # criteria: "up" or "M" up or down for stage-pairwise, M or F for sex-pairwise comparison
+  # criteria: "down" or "F"
+  # scope: either "within" for within-species comparison or "across" for across-species comparison
+  
+  # add "shared" column if two tables don't have it
+  fb_gene_id <- NA
+  if (scope == "within"){ # shared_within species column
+    fb_gene_id <- "fb_gene_id.y" # fb_gene_id.y is the id after merged with species fb table for within species comparison
+          
+    if (!("shared_within" %in% colnames(data1))){
+      data1$shared_within <- NA}
+    if (!("shared_within" %in% colnames(data2))){
+      data2$shared_within <- NA}
+  }
+  else if (scope == "across"){ # shared_across species column
+    fb_gene_id <- "fb_gene_id.x" # fb_gene_id.x is the id after merged with 1-to-1 table for across species comparison
+    
+    if (!("shared_across" %in% colnames(data1))){
+      data1$shared_across <- NA}
+    if (!("shared_across" %in% colnames(data2))){
+      data2$shared_across <- NA}
+  }
+  
+  # update "shared" column value for overlapping genes comparing fb_gene_id.x
+  overlap <- intersect(data1[data1[[column]] == criteria | data1[[column]] == criteria2, ][[fb_gene_id]],
+                       data2[data2[[column]] == criteria | data2[[column]] == criteria2, ][[fb_gene_id]]) # genes without FB id will be ignored
+  overlap <- na.omit(overlap)
+  if (scope == "within"){
+    data1[data1[[fb_gene_id]] %in% overlap,]$shared_within <- "shared"
+    data2[data2[[fb_gene_id]] %in% overlap,]$shared_within <- "shared"
+  }
+  else if (scope == "across"){
+    data1[data1[[fb_gene_id]] %in% overlap,]$shared_across <- "shared"
+    data2[data2[[fb_gene_id]] %in% overlap,]$shared_across <- "shared"
+  }
+  
+  # update "shared" column value for unique genes in each table under first criteria
+  unique1 <- setdiff(data1[data1[[column]] == criteria, ][[fb_gene_id]],
+                     data2[data2[[column]] == criteria, ][[fb_gene_id]])
+  unique1 <- na.omit(unique1)
+  unique2 <- setdiff(data2[data2[[column]] == criteria, ][[fb_gene_id]],
+                     data1[data1[[column]] == criteria, ][[fb_gene_id]])
+  unique2 <- na.omit(unique2)
+  if (scope == "within"){
+    data1[data1[[fb_gene_id]] %in% unique1,]$shared_within <- criteria
+    data2[data2[[fb_gene_id]] %in% unique2,]$shared_within <- criteria
+  }
+  else if (scope == "across"){
+    data1[data1[[fb_gene_id]] %in% unique1,]$shared_across <- criteria
+    data2[data2[[fb_gene_id]] %in% unique2,]$shared_across <- criteria
+  }
+  
+  # update "shared" column value for unique genes in each table under second criteria
+  unique1 <- setdiff(data1[data1[[column]] == criteria2, ][[fb_gene_id]],
+                 data2[data2[[column]] == criteria2, ][[fb_gene_id]])
+  unique1 <- na.omit(unique1)
+  unique2 <- setdiff(data2[data2[[column]] == criteria2, ][[fb_gene_id]],
+                 data1[data1[[column]] == criteria2, ][[fb_gene_id]])
+  unique2 <- na.omit(unique2)
+  if (scope == "within"){
+    data1[data1[[fb_gene_id]] %in% unique1,]$shared_within <- criteria2
+    data2[data2[[fb_gene_id]] %in% unique2,]$shared_within <- criteria2
+  }
+  else if (scope == "across"){
+    data1[data1[[fb_gene_id]] %in% unique1,]$shared_across <- criteria2
+    data2[data2[[fb_gene_id]] %in% unique2,]$shared_across <- criteria2
+  }
+  
+  return(list(data1, data2))
+}
+```
+
+# Compare stage- and sex-pairwise comparison result both within and across species
+```{r}
+# Within species comparison
+shared_result <- mark_shared(deleH_F, deleH_M, "up_down_in5", "up", "down", "within")
+deleH_F <- shared_result[[1]]
+deleH_M <- shared_result[[2]]
+
+shared_result <- mark_shared(deleH_5, deleH_0, "M_F_biased", "M", "F", "within")
+deleH_5 <- shared_result[[1]]
+deleH_0 <- shared_result[[2]]
+
+shared_result <- mark_shared(dgunH_F, dgunH_M, "up_down_in5", "up", "down", "within")
+dgunH_F <- shared_result[[1]]
+dgunH_M <- shared_result[[2]]
+
+shared_result <- mark_shared(dgunH_5, dgunH_0, "M_F_biased", "M", "F", "within")
+dgunH_5 <- shared_result[[1]]
+dgunH_0 <- shared_result[[2]]
+
+# Across species comparison
+shared_result <- mark_shared(deleH_F, dgunH_F, "up_down_in5", "up", "down", "across")
+deleH_F <- shared_result[[1]]
+dgunH_F <- shared_result[[2]]
+
+shared_result <- mark_shared(deleH_M, dgunH_M, "up_down_in5", "up", "down", "across")
+deleH_M <- shared_result[[1]]
+dgunH_M <- shared_result[[2]]
+
+shared_result <- mark_shared(deleH_5, dgunH_5, "M_F_biased", "M", "F", "across")
+deleH_5 <- shared_result[[1]]
+dgunH_5 <- shared_result[[2]]
+
+shared_result <- mark_shared(deleH_0, dgunH_0, "M_F_biased", "M", "F", "across")
+deleH_0 <- shared_result[[1]]
+dgunH_0 <- shared_result[[2]]
+```
+
+# Get list of up- and down-regulated DE gene list from comparison to Excel
+```{r}
+library(openxlsx)
+```
+```{r}
+# commented out to avoid rewrite of existing files
+# write.xlsx(deleH_F, "deleH_F.xlsx")
+# write.xlsx(deleH_M, "deleH_M.xlsx")
+# 
+# write.xlsx(deleH_0, "deleH_0.xlsx")
+# write.xlsx(deleH_5, "deleH_5.xlsx")
+# 
+# write.xlsx(dgunH_F, "dgunH_F.xlsx")
+# write.xlsx(dgunH_M, "dgunH_M.xlsx")
+# 
+# write.xlsx(dgunH_0, "dgunH_0.xlsx")
+# write.xlsx(dgunH_5, "dgunH_5.xlsx")
+```
+
+# Re-import data from Excel
+```{r}
+library(rio)
+```
+
+```{r import_updated_summary_excel_file}
+# DeleH
+path <- "deleH_M.xlsx"
+deleH_M_final <- import_list(path)
+
+path <- "deleH_F.xlsx"
+deleH_F_final <- import_list(path)
+
+path <- "deleH_0.xlsx"
+deleH_0_final <- import_list(path)
+
+path <- "deleH_5.xlsx"
+deleH_5_final <- import_list(path)
+
+# DgunH
+path <- "dgunH_M.xlsx"
+dgunH_M_final <- import_list(path)
+
+path <- "dgunH_F.xlsx"
+dgunH_F_final <- import_list(path)
+
+path <- "dgunH_0.xlsx"
+dgunH_0_final <- import_list(path)
+
+path <- "dgunH_5.xlsx"
+dgunH_5_final <- import_list(path)
+```
+
+# Get number of DE genes in 1-to-1 table for identity comparison
+```{r}
+# Dele
+combined_list <- c(deleH_0_final$`Summary(dups discarded)`$fb_gene_id.y,
+                   deleH_5_final$`Summary(dups discarded)`$fb_gene_id.y,
+                   deleH_F_final$`Summary (dups discarded)`$fb_gene_id.y,
+                   deleH_M_final$`Summary(dups discarded)`$fb_gene_id.y)
+unique_dele <- unique(combined_list)
+deleH_DE <- as.data.frame(unique_dele)
+deleH_DE <- merge(deleH_DE, dele_flybase, by.x = "unique_dele", by.y = "fb_gene_id")
+
+write.xlsx(deleH_DE, file = "deleH_DE.xlsx")
+
+# Dgun
+combined_list <- c(dgunH_0_final$`Summary(dups discarded)`$fb_gene_id.y,
+                   dgunH_5_final$`Summary(dups discarded)`$fb_gene_id.y,
+                   dgunH_F_final$`Summary (dups discarded)`$fb_gene_id.y,
+                   dgunH_M_final$`Summary (dups discarded)`$fb_gene_id.y)
+unique_dgun <- unique(combined_list)
+dgunH_DE <- as.data.frame(unique_dgun)
+dgunH_DE <- merge(dgunH_DE, dgun_flybase, by.x = "unique_dgun", by.y = "fb_gene_id")
+
+write.xlsx(dgunH_DE, file = "dgunH_DE.xlsx")
+```
+
+# Gene Ontology(GO) analysis
+```{r}
+library(clusterProfiler)
+library(AnnotationDbi)
+library(org.Dm.eg.db)
+```
+ID conversion from symbol to EntrezID: https://yulab-smu.top/biomedical-knowledge-mining-book/useful-utilities.html#id-convert
+
+clusterProfiler documentation:
+https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-go.html
+
+visualization documentation:
+https://learn.gencore.bio.nyu.edu/rna-seq-analysis/over-representation-analysis/
+
+```{r set_background}
+# background: all PC gene in 1-to-1 table
+background_entrez <- bitr(dele_dgun_unique$fb_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db") # all PC gene in 1-to-1 table for both species
+```
+
+```{r stage-pairwise Dele H gene ontology over-representation test}
+# Dele Head Male all DEG
+within_table <- deleH_M_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_M_up_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+
+as.data.frame(GO_deleH_M_up_all)
+
+fit <- plot(dotplot(GO_deleH_M_up_all, showCategory = 15,
+                    title = "GO BP Dele Head Male Up-regulated"))
+fit <- plot(dotplot(GO_deleH_M_up_all, showCategory = 15))
+png("./GO_analysis/deleH_m_up_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_M_down_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_deleH_M_down_all)
+
+fit <- plot(dotplot(GO_deleH_M_down_all, showCategory = 15,
+                    title = "GO BP Dele Head Male Down-regulated"))
+fit <- plot(dotplot(GO_deleH_M_down_all, showCategory = 15,))
+png("./GO_analysis/deleH_m_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dele Head Female all DEG
+within_table <- deleH_F_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_F_up_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_deleH_F_up_all)
+
+fit <- plot(dotplot(GO_deleH_F_up_all, showCategory = 15,
+                    title = "GO BP Dele Head Female Up-regulated"))
+
+png("./GO_analysis/deleH_f_up_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_F_down_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_deleH_F_down_all)
+
+fit <- plot(dotplot(GO_deleH_F_down_all, showCategory = 15,
+                    title = "GO BP Dele Head Female Down-regulated"))
+
+png("./GO_analysis/deleH_f_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dele Head Male up+down all DEG
+within_table <- deleH_M_final$`within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_M_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+
+as.data.frame(GO_deleH_M_all)
+
+fit <- plot(dotplot(GO_deleH_M_all, showCategory = 15,
+                    title = "GO BP Dele Head Male Up + Down"))
+png("./GO_analysis/deleH_m_all.png", res = 250, width = 1500, height = 1700)
+print(fit)
+dev.off()
+
+
+kegg_organism <- "dme"
+
+kegg_deleH_M_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_M_all)
+
+
+fit <- plot(dotplot(kegg_deleH_M_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Male Up + Down"))
+png("./GO_analysis/kegg_deleH_M_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dele Head Female up+down all DEG
+within_table <- deleH_F_final$`within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_F_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_deleH_F_all)
+
+fit <- plot(dotplot(GO_deleH_F_all, showCategory = 15,
+                    title = "GO BP Dele Head Female Up + Down"))
+
+png("./GO_analysis/deleH_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+kegg_deleH_F_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_F_all)
+
+
+fit <- plot(dotplot(kegg_deleH_F_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Female Up + Down"))
+png("./GO_analysis/kegg_deleH_F_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+```
+
+```{r stage-pairwise Dele H kegg module over-representation analysis}
+# Convert gene IDs for enrichKEGG function
+# "kegg", "ncbi-geneid", "ncbi-proteinid", or "uniport" are accepted by gseKEGG()
+# "ENTREZID" are the same as ncbi-geneid for org.Dm.eg.db, so it will be used for toType
+# genes_entrez will be used as it already contains "ENTREZID"
+
+kegg_organism = "dme"
+
+# Dele Head Male all DEG
+within_table <- deleH_M_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_deleH_M_up_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_M_up_all)
+
+fit <- plot(dotplot(kegg_deleH_M_up_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Male Up-regulated"))
+fit <- plot(dotplot(kegg_deleH_M_up_all, showCategory = 15))
+png("./GO_analysis/kegg_deleH_m_up_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_deleH_M_down_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                    universe = background_entrez$ENTREZID,
+                                    organism = kegg_organism,
+                                    pvalueCutoff = 0.05,
+                                    keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_M_down_all)
+
+fit <- plot(dotplot(kegg_deleH_M_down_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Male Down-regulated"))
+
+png("./GO_analysis/kegg_deleH_m_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dele Head Female all DEG
+within_table <- deleH_F_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_deleH_F_up_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_F_up_all)
+
+fit <- plot(dotplot(kegg_deleH_F_up_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Female Up-regulated"))
+
+png("./GO_analysis/kegg_deleH_f_up_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_deleH_F_down_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_F_down_all)
+
+fit <- plot(dotplot(kegg_deleH_F_down_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Female Down-regulated"))
+
+png("./GO_analysis/kegg_deleH_f_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+```
+
+```{r stage-pairwise Dgun H gene ontology over-representation test}
+# Dgun Head Male all DEG
+within_table <- dgunH_M_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_M_up_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+
+as.data.frame(GO_dgunH_M_up_all)
+
+fit <- plot(dotplot(GO_dgunH_M_up_all, showCategory = 15,
+                    title = "GO BP Dgun Head Male Up-regulated"))
+png("./GO_analysis/dgunH_m_up_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_M_down_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_dgunH_M_down_all)
+
+fit <- plot(dotplot(GO_dgunH_M_down_all, showCategory = 15,
+                    title = "GO BP Dgun Head Male Down-regulated"))
+
+png("./GO_analysis/dgunH_m_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dgun Head Female all DEG
+within_table <- dgunH_F_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_F_up_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_dgunH_F_up_all)
+
+fit <- plot(dotplot(GO_dgunH_F_up_all, showCategory = 15,
+                    title = "GO BP Dgun Head Female Up-regulated"))
+
+png("./GO_analysis/dgunH_f_up_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_F_down_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_dgunH_F_down_all)
+
+fit <- plot(dotplot(GO_dgunH_F_down_all, showCategory = 15,
+                    title = "GO BP Dgun Head Female Down-regulated"))
+
+png("./GO_analysis/dgunH_f_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dgun Head Male all DEG Up + Down
+within_table <- dgunH_M_final$`within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_M_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+
+as.data.frame(GO_dgunH_M_all)
+
+fit <- plot(dotplot(GO_dgunH_M_all, showCategory = 15,
+                    title = "GO BP Dgun Head Male Up + Down"))
+png("./GO_analysis/dgunH_m_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+kegg_dgunH_M_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_M_all)
+
+fit <- plot(dotplot(kegg_dgunH_M_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head Male Up + Down"))
+png("./GO_analysis/kegg_dgunH_m_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+# Dgun Head Female all DEG Up + Down
+within_table <- dgunH_F_final$`within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_F_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                              universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05
+                              )
+as.data.frame(GO_dgunH_F_all)
+
+fit <- plot(dotplot(GO_dgunH_F_all, showCategory = 15,
+                    title = "GO BP Dgun Head Female Up + Down"))
+
+png("./GO_analysis/dgunH_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+kegg_dgunH_F_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_F_all)
+
+fit <- plot(dotplot(kegg_dgunH_F_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head Female Up + Down"))
+
+png("./GO_analysis/kegg_dgunH_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+```
+
+```{r stage-pairwise Dgun H kegg module over-representation analysis}
+# Dgun Head Male all DEG
+within_table <- dgunH_M_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_dgunH_M_up_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_M_up_all)
+
+# fit <- plot(dotplot(kegg_dgunH_M_up_all, showCategory = 15,
+#                     title = "KEGG pathways Dgun Head Male Up-regulated"))
+fit <- plot(dotplot(kegg_dgunH_M_up_all, showCategory = 15))
+png("./GO_analysis/kegg_dgunH_m_up_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_dgunH_M_down_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                    universe = background_entrez$ENTREZID,
+                                    organism = kegg_organism,
+                                    pvalueCutoff = 0.05,
+                                    keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_M_down_all)
+
+fit <- plot(dotplot(kegg_dgunH_M_down_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head Male Down-regulated"))
+
+png("./GO_analysis/kegg_dgunH_m_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dgun Head Female all DEG
+within_table <- dgunH_F_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$up_down_in5 == "up",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_dgunH_F_up_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_F_up_all)
+
+fit <- plot(dotplot(kegg_dgunH_F_up_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head Female Up-regulated"))
+
+png("./GO_analysis/kegg_dgunH_f_up_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$up_down_in5 == "down",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+kegg_dgunH_F_down_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                    universe = background_entrez$ENTREZID,
+                                    organism = kegg_organism,
+                                    pvalueCutoff = 0.05,
+                                    keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_F_down_all)
+
+fit <- plot(dotplot(kegg_dgunH_F_down_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head Female Down-regulated"))
+
+png("./GO_analysis/kegg_dgunH_f_down_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+```
+```{r stage_pairwise GO result export to txt}
+extract_go <- function(data, output_name){
+  # read data into a dataframe, 
+  # select only the ID(GO term) and p.adjusted value, 
+  # export into a txt file
+  data <- as.data.frame(data)
+  selected_column <- data[, c("ID", "p.adjust")]
+  write.table(selected_column, output_name, sep = " ", 
+              row.names = FALSE, quote = FALSE)
+}
+# Dele Head
+# Female up
+extract_go(GO_deleH_F_up_all, "go_deleH_F_up.txt")
+# Female down
+extract_go(GO_deleH_F_down_all, "go_deleH_F_down.txt")
+# Male up
+extract_go(GO_deleH_M_up_all, "go_deleH_M_up.txt")
+# Male down
+extract_go(GO_deleH_M_down_all, "go_deleH_M_down.txt")
+
+# Dgun Head
+# Female up
+extract_go(GO_dgunH_F_up_all, "go_dgunH_F_up.txt")
+# Female down
+extract_go(GO_dgunH_F_down_all, "go_dgunH_F_down.txt")
+# Male up
+extract_go(GO_dgunH_M_up_all, "go_dgunH_M_up.txt")
+# Male down
+extract_go(GO_dgunH_M_down_all, "go_dgunH_M_down.txt")
+```
+
+```{r sex-pairwise Dele H GO + KEGG analysis}
+kegg_organism <- "dme"
+
+# Dele Head day5 all DEG
+within_table <- deleH_5_final$`within(dups discarded)`
+genes_to_test <- within_table[within_table$M_F_biased == "M",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_5_M_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05)
+as.data.frame(GO_deleH_5_M_all)
+kegg_deleH_5_M_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_5_M_all)
+
+fit <- plot(dotplot(GO_deleH_5_M_all, showCategory = 15,
+                    title = "GO BP Dele Head Old Male-biased"))
+fit <- plot(dotplot(GO_deleH_5_M_all, showCategory = 15))
+png("./GO_analysis/deleH_5_m_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+# fit <- plot(dotplot(kegg_deleH_5_M_all, showCategory = 15,
+#                     title = "KEGG pathways Dele Head Old Male-biased"))
+# png("./GO_analysis/kegg_deleH_5_m_all.png", res = 250, width = 1500, height = 1500)
+# print(fit)
+# dev.off()
+
+genes_to_test <- within_table[within_table$M_F_biased == "F",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_5_F_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05)
+as.data.frame(GO_deleH_5_F_all)
+kegg_deleH_5_F_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_5_F_all)
+
+fit <- plot(dotplot(GO_deleH_5_F_all, showCategory = 15,
+                    title = "GO BP Dele Head Old Female-biased"))
+png("./GO_analysis/deleH_5_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_deleH_5_F_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Old Female-biased"))
+png("./GO_analysis/kegg_deleH_5_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dele Head day0 all DEG
+within_table <- deleH_0_final$`Within(dups discarded)`
+genes_to_test <- within_table[within_table$M_F_biased == "M",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_0_M_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05)
+as.data.frame(GO_deleH_0_M_all)
+kegg_deleH_0_M_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_0_M_all)
+
+# fit <- plot(dotplot(GO_deleH_0_M_all, showCategory = 15,
+#                     title = "GO BP Dele Head Young Male-biased"))
+# png("./GO_analysis/deleH_0_m_all.png", res = 250, width = 1500, height = 2000)
+# print(fit)
+# dev.off()
+
+fit <- plot(dotplot(kegg_deleH_0_M_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head young Male-biased"))
+png("./GO_analysis/kegg_deleH_0_m_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$M_F_biased == "F",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_0_F_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                              OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05)
+as.data.frame(GO_deleH_0_F_all)
+kegg_deleH_0_F_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_0_F_all)
+
+fit <- plot(dotplot(GO_deleH_0_F_all, showCategory = 15,
+                    title = "GO BP Dele Head Young Female-biased"))
+png("./GO_analysis/deleH_0_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_deleH_0_F_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Young Female-biased"))
+png("./GO_analysis/kegg_deleH_0_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+
+
+##====================================================================##
+
+# Dele Head day5 M + F all DEG
+within_table <- deleH_5_final$`within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_5_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05)
+as.data.frame(GO_deleH_5_all)
+kegg_deleH_5_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_5_all)
+
+fit <- plot(dotplot(GO_deleH_5_all, showCategory = 15,
+                    title = "GO BP Dele Head Old M + F"))
+png("./GO_analysis/deleH_5_all.png", res = 250, width = 1350, height = 2000)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_deleH_5_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head Old M + F"))
+png("./GO_analysis/kegg_deleH_5_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dele Head day0 M + F all DEG
+within_table <- deleH_0_final$`Within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_deleH_0_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                              ont = "BP", # Biological process, cellular component, molecular function
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 0.05)
+as.data.frame(GO_deleH_0_all)
+kegg_deleH_0_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_deleH_0_all)
+
+fit <- plot(dotplot(GO_deleH_0_all, showCategory = 15,
+                    title = "GO BP Dele Head Young M + F"))
+png("./GO_analysis/deleH_0_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_deleH_0_all, showCategory = 15,
+                    title = "KEGG pathways Dele Head young M + F"))
+png("./GO_analysis/kegg_deleH_0_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+```
+
+```{r sex-pairwise Dgun H GO + KEGG analysis}
+kegg_organism <- "dme"
+
+# Dgun Head day5 all DEG
+within_table <- dgunH_5_final$`Within(dups discarded)`
+genes_to_test <- within_table[within_table$M_F_biased == "M",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_5_M_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                             ont = "BP", # Biological process, cellular component, molecular function
+                             pAdjustMethod = "BH",
+                             pvalueCutoff = 0.05,
+                             qvalueCutoff = 0.05)
+as.data.frame(GO_dgunH_5_M_all)
+kegg_dgunH_5_M_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_5_M_all)
+
+fit <- plot(dotplot(GO_dgunH_5_M_all, showCategory = 15,
+                    title = "GO BP Dgun Head Old Male-biased"))
+fit <- plot(dotplot(GO_dgunH_5_M_all, showCategory = 15))
+png("./GO_analysis/dgunH_5_m_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_dgunH_5_M_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head Old Male-biased"))
+fit <- plot(dotplot(kegg_dgunH_5_M_all, showCategory = 15))
+png("./GO_analysis/kegg_dgunH_5_m_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$M_F_biased == "F",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_5_F_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                             ont = "BP", # Biological process, cellular component, molecular function
+                             pAdjustMethod = "BH",
+                             pvalueCutoff = 0.05,
+                             qvalueCutoff = 0.05)
+as.data.frame(GO_dgunH_5_F_all)
+kegg_dgunH_5_F_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_5_F_all)
+
+fit <- plot(dotplot(GO_dgunH_5_F_all, showCategory = 15,
+                    title = "GO BP Dgun Head Old Female-biased"))
+png("./GO_analysis/dgunH_5_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_dgunH_5_F_all, showCategory = 13,
+                    title = "KEGG pathways Dgun Head Old Female-biased"))
+png("./GO_analysis/kegg_dgunH_5_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# Dgun Head day0 all DEG
+within_table <- dgunH_0_final$`Within(dups discarded)`
+genes_to_test <- within_table[within_table$M_F_biased == "M",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_0_M_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                             ont = "BP", # Biological process, cellular component, molecular function
+                             pAdjustMethod = "BH",
+                             pvalueCutoff = 0.05,
+                             qvalueCutoff = 0.05)
+as.data.frame(GO_dgunH_0_M_all)
+kegg_dgunH_0_M_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_0_M_all)
+
+fit <- plot(dotplot(GO_dgunH_0_M_all, showCategory = 15,
+                    title = "GO BP Dgun Head Young Male-biased"))
+png("./GO_analysis/dgunH_0_m_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_dgunH_0_M_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head young Male-biased"))
+png("./GO_analysis/kegg_dgunH_0_m_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+genes_to_test <- within_table[within_table$M_F_biased == "F",]$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_0_F_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                             ont = "BP", # Biological process, cellular component, molecular function
+                             pAdjustMethod = "BH",
+                             pvalueCutoff = 0.05,
+                             qvalueCutoff = 0.05)
+as.data.frame(GO_dgunH_0_F_all)
+kegg_dgunH_0_F_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_0_F_all)
+
+fit <- plot(dotplot(GO_dgunH_0_F_all, showCategory = 15,
+                    title = "GO BP Dgun Head Young Female-biased"))
+png("./GO_analysis/dgunH_0_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_dgunH_0_F_all, showCategory = 13,
+                    title = "KEGG pathways Dgun Head Young Female-biased"))
+png("./GO_analysis/kegg_dgunH_0_f_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+
+##====================================================================##
+
+# Dgun Head day5 all DEG M + F
+within_table <- dgunH_5_final$`Within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_5_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                             ont = "BP", # Biological process, cellular component, molecular function
+                             pAdjustMethod = "BH",
+                             pvalueCutoff = 0.05,
+                             qvalueCutoff = 0.05)
+as.data.frame(GO_dgunH_5_all)
+kegg_dgunH_5_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_5_all)
+
+fit <- plot(dotplot(GO_dgunH_5_all, showCategory = 15,
+                    title = "GO BP Dgun Head Old M + F"))
+png("./GO_analysis/dgunH_5_all.png", res = 250, width = 1500, height = 1500)
+print(fit)
+dev.off()
+
+fit <- plot(dotplot(kegg_dgunH_5_all, showCategory = 15,
+                    title = "KEGG pathways Dgun Head Old M + F"))
+png("./GO_analysis/kegg_dgunH_5_all.png", res = 250, width = 1500, height = 2300)
+print(fit)
+dev.off()
+
+
+# Dgun Head day0 all DEG M + F
+within_table <- dgunH_0_final$`Within(dups discarded)`
+genes_to_test <- within_table$symbol # extract genes symbols
+genes_entrez <- bitr(genes_to_test, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Dm.eg.db")
+
+GO_dgunH_0_all <- enrichGO(gene = genes_entrez$ENTREZID, #DEG entrezID
+                             universe = background_entrez$ENTREZID, #all PC gene in both species 1-to-1
+                             OrgDb = org.Dm.eg.db,
+                             ont = "BP", # Biological process, cellular component, molecular function
+                             pAdjustMethod = "BH",
+                             pvalueCutoff = 0.05,
+                             qvalueCutoff = 0.05)
+as.data.frame(GO_dgunH_0_all)
+kegg_dgunH_0_all <- enrichKEGG(gene = genes_entrez$ENTREZID,
+                                  universe = background_entrez$ENTREZID,
+                                  organism = kegg_organism,
+                                  pvalueCutoff = 0.05,
+                                  keyType = "ncbi-geneid")
+as.data.frame(kegg_dgunH_0_all)
+
+fit <- plot(dotplot(GO_dgunH_0_all, showCategory = 15,
+                    title = "GO BP Dgun Head Young M + F"))
+png("./GO_analysis/dgunH_0_all.png", res = 250, width = 1500, height = 2000)
+print(fit)
+dev.off()
+
+# fit <- plot(dotplot(kegg_dgunH_0_all, showCategory = 15,
+#                     title = "KEGG pathways Dgun Head young M + F"))
+# png("./GO_analysis/kegg_dgunH_0_all.png", res = 250, width = 1500, height = 2000)
+# print(fit)
+# dev.off()
+```
+
+```{r sex_pairwise GO result export to txt}
+# Dele Head
+# Day 5 Male-biased
+extract_go(GO_deleH_5_M_all, "go_deleH_5_M.txt")
+# Day 5 female-biased
+extract_go(GO_deleH_5_F_all, "go_deleH_5_F.txt")
+# Day 0 Male-biased
+extract_go(GO_deleH_0_M_all, "go_deleH_0_M.txt")
+# Day 0 female-biased
+extract_go(GO_deleH_0_F_all, "go_deleH_0_F.txt")
+
+# Dgun Head
+# Day 5 Male-biased
+extract_go(GO_dgunH_5_M_all, "go_dgunH_5_M.txt")
+# Day 5 female-biased
+extract_go(GO_dgunH_5_F_all, "go_dgunH_5_F.txt")
+# Day 0 Male-biased
+extract_go(GO_dgunH_0_M_all, "go_dgunH_0_M.txt")
+# Day 0 female-biased
+extract_go(GO_dgunH_0_F_all, "go_dgunH_0_F.txt")
+```
+
+# REVIGO convert tsv to excel file
+
+```{r stage-pairwise revigo excel file exportation}
+# DeleH
+file_path <- "GO_revigo_id/revigo_deleH_F_up.tsv"
+revigo_deleH_F_up <- read.table(file_path, header = TRUE, sep = "\t", 
+                   stringsAsFactors = FALSE)
+write.xlsx(revigo_deleH_F_up, "./GO_revigo_id/revigo_deleH_F_up.xlsx")
+
+file_path <- "GO_revigo_id/revigo_deleH_F_down.tsv"
+revigo_deleH_F_down <- read.table(file_path, header = TRUE, sep = "\t", 
+                   stringsAsFactors = FALSE)
+write.xlsx(revigo_deleH_F_down, "./GO_revigo_id/revigo_deleH_F_down.xlsx")
+
+file_path <- "GO_revigo_id/revigo_deleH_M_up.tsv"
+revigo_deleH_M_up <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+write.xlsx(revigo_deleH_M_up, "./GO_revigo_id/revigo_deleH_M_up.xlsx")
+
+file_path <- "GO_revigo_id/revigo_deleH_M_down.tsv"
+revigo_deleH_M_down <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+write.xlsx(revigo_deleH_M_down, "./GO_revigo_id/revigo_deleH_M_down.xlsx")
+
+# DgunH
+file_path <- "GO_revigo_id/revigo_dgunH_F_up.tsv"
+revigo_dgunH_F_up <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_F_up, "./GO_revigo_id/revigo_dgunH_F_up.xlsx")
+
+file_path <- "GO_revigo_id/revigo_dgunH_F_down.tsv"
+revigo_dgunH_F_down <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_F_down, "./GO_revigo_id/revigo_dgunH_F_down.xlsx")
+
+file_path <- "GO_revigo_id/revigo_dgunH_M_up.tsv"
+revigo_dgunH_M_up <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_M_up, "./GO_revigo_id/revigo_dgunH_M_up.xlsx")
+
+file_path <- "GO_revigo_id/revigo_dgunH_M_down.tsv"
+revigo_dgunH_M_down <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_M_down, "./GO_revigo_id/revigo_dgunH_M_down.xlsx")
+```
+
+```{r sex-pairwise revigo excel file exportation}
+# DeleH
+file_path <- "GO_revigo_id/revigo_deleH_5_M.tsv"
+revigo_deleH_5_M <- read.table(file_path, header = TRUE, sep = "\t", 
+                   stringsAsFactors = FALSE)
+write.xlsx(revigo_deleH_5_M, "./GO_revigo_id/revigo_deleH_5_M.xlsx")
+
+file_path <- "GO_revigo_id/revigo_deleH_5_F.tsv"
+revigo_deleH_5_F <- read.table(file_path, header = TRUE, sep = "\t", 
+                   stringsAsFactors = FALSE)
+write.xlsx(revigo_deleH_5_F, "./GO_revigo_id/revigo_deleH_5_F.xlsx")
+
+# file_path <- "GO_revigo_id/revigo_deleH_0_M.tsv"
+# revigo_deleH_0_M <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+# write.xlsx(revigo_deleH_0_M, "./GO_revigo_id/revigo_deleH_0_M.xlsx")
+
+file_path <- "GO_revigo_id/revigo_deleH_0_F.tsv"
+revigo_deleH_0_F <- read.table(file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+write.xlsx(revigo_deleH_0_F, "./GO_revigo_id/revigo_deleH_0_F.xlsx")
+
+# DgunH
+file_path <- "GO_revigo_id/revigo_dgunH_5_M.tsv"
+revigo_dgunH_5_M <- read.table(file_path, header = TRUE, sep = "\t", 
+                               stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_5_M, "./GO_revigo_id/revigo_dgunH_5_M.xlsx")
+
+file_path <- "GO_revigo_id/revigo_dgunH_5_F.tsv"
+revigo_dgunH_5_F <- read.table(file_path, header = TRUE, sep = "\t", 
+                               stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_5_F, "./GO_revigo_id/revigo_dgunH_5_F.xlsx")
+
+file_path <- "GO_revigo_id/revigo_dgunH_0_M.tsv"
+revigo_dgunH_0_M <- read.table(file_path, header = TRUE, sep = "\t", 
+                               stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_0_M, "./GO_revigo_id/revigo_dgunH_0_M.xlsx")
+
+file_path <- "GO_revigo_id/revigo_dgunH_0_F.tsv"
+revigo_dgunH_0_F <- read.table(file_path, header = TRUE, sep = "\t", 
+                               stringsAsFactors = FALSE)
+write.xlsx(revigo_dgunH_0_F, "./GO_revigo_id/revigo_dgunH_0_F.xlsx")
+
+```
+
+# GO dotplot for revigo result
+
+```{r stage-pairwise Male upgulated in Day 5}
+# Dele Male up
+GO_deleH_M_up_unique <- GO_deleH_M_up_all
+GO_deleH_M_up_unique@result <- GO_deleH_M_up_unique@result[GO_deleH_M_up_unique@result$ID %in% revigo_deleH_M_up$TermID, ]
+
+plot(dotplot(GO_deleH_M_up_unique), showCategory = 15,
+     title = "GO pathways Dele Head Male Up-regulated")
+
+# Dgun Male up
+GO_dgunH_M_up_unique <- GO_dgunH_M_up_all
+GO_dgunH_M_up_unique@result <- GO_dgunH_M_up_unique@result[GO_dgunH_M_up_unique@result$ID %in% revigo_dgunH_M_up$TermID, ]
+
+plot(dotplot(GO_dgunH_M_up_unique), showCategory = 15,
+     title = "GO pathways Dgun Head Male Up-regulated")
+```
+
+```{r sex-pairwise Day 5 male-biased}
+# Dele Male up
+GO_deleH_5_M_unique <- GO_deleH_5_M_all
+GO_deleH_5_M_unique@result <- GO_deleH_5_M_unique@result[GO_deleH_5_M_unique@result$ID %in% revigo_deleH_5_M$TermID, ]
+
+plot(dotplot(GO_deleH_5_M_unique), showCategory = 15,
+     title = "GO pathways Dele Head Day Male-biased")
+
+# Dgun Male up
+GO_dgunH_5_M_unique <- GO_dgunH_5_M_all
+GO_dgunH_5_M_unique@result <- GO_dgunH_5_M_unique@result[GO_dgunH_5_M_unique@result$ID %in% revigo_dgunH_5_M$TermID, ]
+
+plot(dotplot(GO_dgunH_5_M_unique), showCategory = 15,
+     title = "GO pathways Dgun Head Day Male-biased")
+```
+
+
+```{r reference + annotation + logCPM}
+# top.table_deleHM0F0$Gene <- rownames(top.table_deleHM0F0)
+# fdr_deleHM0F0 <- top.table_deleHM0F0[which(top.table_deleHM0F0$adj.P.Val < fdr),]
+# 
+# anno_dele <- anno_dele[anno_dele$gene_id %in% fdr_deleH$Gene,]
+# 
+# log2d_deleHdf <- as.data.frame(log2d_deleH)
+# log2d_deleHdf$Gene <- rownames(log2d_deleHdf)
+# log2d_deleHdf <- log2d_deleHdf[,c("Gene", names(log2d_deleHdf[,-ncol(log2d_deleHdf)]))] # [,-ncol(log2d_deleHdf)] select all col except the last one
+# log2d_deleH0.01 <- log2d_deleHdf[log2d_deleHdf$Gene %in% fdr_deleH$Gene,]
+# top.table0.01_deleH <- merge(anno_dele, fdr_deleH, by.x = "gene_id", by.y = "Gene")
+# top.table0.01_deleH <- merge(top.table0.01_deleH, log2d_deleH0.01, by.x = "gene_id", by.y = "Gene")
+```
+
