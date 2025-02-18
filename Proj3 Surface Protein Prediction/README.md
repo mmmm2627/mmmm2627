@@ -1,0 +1,7 @@
+- project.ipynb: Jupyter Notebook file contains all the code scripts and results.
+- subset: subset of the dataset
+  - test_cite_inputs_id.feather: metadata of test data for CITEseq dataset.
+  - test_cite_X.npy: test data for CITEseq dataset.
+  - train_cite_inputs_id.feather: metadata of train data for CITEseq dataset.
+  - train_cite_targets.npy: Y (target) data of train data for CITEseq dataset.
+  - train_cite_X.npy: X data of train data for CITEseq dataset.
