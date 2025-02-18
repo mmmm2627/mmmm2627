@@ -8,8 +8,9 @@ This project aims to predict surface protein levels based on gene expression dat
 - **Model Evaluation**: Identified CNN as the best-fit model for robust predictions.  
 
 ### Dataset  
-The dataset consists of gene expression data and corresponding surface protein levels for training and testing, 
-generated from `data_subset.ipynb`.
+The dataset was sourced from [Kaggle's Open Problems Multimodal Competition](https://www.kaggle.com/competitions/open-problems-multimodal/overview). 
+It includes gene expression data and corresponding surface protein levels for training and testing. 
+The data used in this project was extracted using `data_subset.ipynb`.
 - `subset/` – A subset of the dataset for testing and validation.  
   - `test_cite_inputs_id.feather` – Metadata of test data for the CITEseq dataset.  
   - `test_cite_X.npy` – Test set gene expression data.  
