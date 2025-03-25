@@ -1,4 +1,4 @@
-## Project 2 Advertising Campaign Data Analysis
+## Advertising Campaign Data Analysis
 
 This project streamlines the process of integrating material cost information across multiple advertising platforms. 
 Ads are created using various materials and uploaded to different platforms, where clients are charged each time a user clicks on an ad.
