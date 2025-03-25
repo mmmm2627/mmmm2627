@@ -1,4 +1,4 @@
-## Project 1 Comparative Head Transcriptome Analysis in *Drosophila elegans* Species Subgroup
+## Comparative Head Transcriptome Analysis in *Drosophila elegans* Species Subgroup
 
 ### Dataset 
 - *Drosophila elegan* genome: [link](https://www.ncbi.nlm.nih.gov/datasets/genome/GCA_018152505.1/)
